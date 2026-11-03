@@ -1,0 +1,19 @@
+{
+  "name": "website-crawler",
+  "version": "1.0.0",
+  "description": "A web crawler that extracts content and saves it as markdown files",
+  "main": "website-crawler.js",
+  "scripts": {
+    "start": "node website-crawler.js",
+    "setup": "node website-crawler-cli.js"
+  },
+  "bin": {
+    "website-crawler": "website-crawler-cli.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0-rc.12",
+    "sanitize-filename": "^1.6.3",
+    "xml2js": "^0.6.2"
+  }
+}

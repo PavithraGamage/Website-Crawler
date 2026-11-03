@@ -1,0 +1,12 @@
+{
+  "startUrl": "https://www.oscarwylee.co.nz/",
+  "sitemapUrl": "https://www.oscarwylee.co.nz/sitemapnz.xml",
+  "outputDir": "./output",
+  "maxPages": 1000,
+  "ignoreParams": true,
+  "useSitemap": true,
+  "skipImages": true,
+  "addSourceUrl": true,
+  "cleanOutput": true,
+  "strictSitemapOnly": true
+}

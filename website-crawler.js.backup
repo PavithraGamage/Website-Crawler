@@ -1,0 +1,360 @@
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const cheerio = require('cheerio');
+const sanitize = require('sanitize-filename');
+const { URL } = require('url');
+const xml2js = require('xml2js');
+
+// Configuration
+const config = {
+  startUrl: 'https://example.com', // Replace with your website URL
+  sitemapUrl: 'https://example.com/sitemap.xml', // Replace with your sitemap URL
+  outputDir: './output',
+  maxPages: 100, // Limit to prevent infinite crawling
+  ignoreParams: true, // Ignore URL parameters to avoid duplicates
+  useSitemap: true, // Use sitemap for crawling
+  skipImages: true, // Skip image processing
+  addSourceUrl: true, // Add source URL to markdown
+  cleanOutput: true, // Clean up HTML comments and whitespace
+  strictSitemapOnly: false, // When true, only crawl URLs listed in sitemap
+};
+
+// Queue to store URLs to crawl
+const queue = [config.startUrl];
+// Set to track visited URLs
+const visited = new Set();
+
+// Function to create directory if it doesn't exist
+const ensureDirectoryExists = (dirPath) => {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+};
+
+// Function to normalize URLs
+const normalizeUrl = (url, baseUrl) => {
+  try {
+    // Handle relative URLs
+    const fullUrl = new URL(url, baseUrl);
+    
+    // Skip URLs with hash fragments
+    if (fullUrl.hash) {
+      return null;
+    }
+    
+    // Return URL without query parameters if configured
+    if (config.ignoreParams) {
+      fullUrl.search = '';
+    }
+    
+    return fullUrl.toString();
+  } catch (error) {
+    console.error(`Invalid URL: ${url}`);
+    return null;
+  }
+};
+
+// Function to extract links from a page
+const extractLinks = ($, baseUrl) => {
+  // If strictSitemapOnly is enabled and we're using sitemap, don't extract links from content
+  if (config.useSitemap && config.strictSitemapOnly) {
+    return [];
+  }
+  
+  const links = [];
+  
+  // Find all links within the main content area
+  $('#maincontent a').each((i, element) => {
+    const href = $(element).attr('href');
+    if (href) {
+      const normalizedUrl = normalizeUrl(href, baseUrl);
+      if (normalizedUrl && normalizedUrl.startsWith(config.startUrl)) {
+        links.push(normalizedUrl);
+      }
+    }
+  });
+  
+  return links;
+};
+
+// Function to convert HTML to Markdown
+const convertToMarkdown = ($, baseUrl) => {
+  let markdown = '';
+  
+  // Get the main content
+  const mainContent = $('#maincontent');
+  
+  if (mainContent.length === 0) {
+    console.warn('No #maincontent found on the page');
+    return null;
+  }
+  
+  // Add the page URL at the top of the markdown if configured
+  if (config.addSourceUrl) {
+    markdown = `# Source: ${baseUrl}\n\n`;
+  }
+  
+  // Clone the content to avoid modifying the original
+  const content = mainContent.clone();
+  
+  // Remove all script and style tags
+  content.find('script, style').remove();
+  
+  // Process headings
+  content.find('h1, h2, h3, h4, h5, h6').each((i, element) => {
+    const $el = $(element);
+    const tagName = $el.prop('tagName').toLowerCase();
+    const level = tagName.charAt(1);
+    const text = $el.text().trim();
+    
+    $el.replaceWith(`\n${'#'.repeat(parseInt(level))} ${text}\n`);
+  });
+  
+  // Process paragraphs
+  content.find('p').each((i, element) => {
+    const $el = $(element);
+    $el.replaceWith(`\n${$el.text().trim()}\n`);
+  });
+  
+  // Process links
+  content.find('a').each((i, element) => {
+    const $el = $(element);
+    const href = $el.attr('href');
+    const text = $el.text().trim();
+    
+    if (href) {
+      const normalizedUrl = normalizeUrl(href, baseUrl);
+      $el.replaceWith(`[${text}](${normalizedUrl || href})`);
+    }
+  });
+  
+  // Process lists
+  content.find('ul, ol').each((i, element) => {
+    const $el = $(element);
+    const isOrdered = $el.prop('tagName').toLowerCase() === 'ol';
+    
+    $el.find('li').each((j, li) => {
+      const $li = $(li);
+      const text = $li.text().trim();
+      $li.replaceWith(`${isOrdered ? `${j+1}. ` : '* '}${text}\n`);
+    });
+    
+    $el.replaceWith(`\n${$el.html()}\n`);
+  });
+  
+  // Process images
+  if (!config.skipImages) {
+    content.find('img').each((i, element) => {
+      const $el = $(element);
+      const src = $el.attr('src');
+      const alt = $el.attr('alt') || '';
+      
+      if (src) {
+        const normalizedSrc = normalizeUrl(src, baseUrl);
+        $el.replaceWith(`![${alt}](${normalizedSrc || src})`);
+      }
+    });
+  } else {
+    // Remove images if configured to skip them
+    content.find('img').remove();
+  }
+  
+  // Process tables
+  content.find('table').each((i, element) => {
+    const $table = $(element);
+    let tableMarkdown = '\n';
+    
+    // Headers
+    $table.find('th').each((j, th) => {
+      tableMarkdown += `| ${$(th).text().trim()} `;
+    });
+    tableMarkdown += '|\n';
+    
+    // Separator
+    $table.find('th').each((j, th) => {
+      tableMarkdown += '| --- ';
+    });
+    tableMarkdown += '|\n';
+    
+    // Rows
+    $table.find('tr').each((j, tr) => {
+      const $tds = $(tr).find('td');
+      if ($tds.length > 0) {
+        $tds.each((k, td) => {
+          tableMarkdown += `| ${$(td).text().trim()} `;
+        });
+        tableMarkdown += '|\n';
+      }
+    });
+    
+    $table.replaceWith(tableMarkdown);
+  });
+  
+  // Process blockquotes
+  content.find('blockquote').each((i, element) => {
+    const $el = $(element);
+    const text = $el.text().trim().split('\n').map(line => `> ${line}`).join('\n');
+    $el.replaceWith(`\n${text}\n`);
+  });
+  
+  // Get the text content and clean up
+  markdown += content.html()
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '') // Remove remaining HTML tags
+    .replace(/\n{3,}/g, '\n\n'); // Remove excessive newlines
+    
+  // Clean up HTML comments and whitespace if configured
+  if (config.cleanOutput) {
+    markdown = markdown
+      .replace(/^\s*[0-9]\s*\s*/g, '') // Remove number followed by  at the beginning of lines
+      .replace(/^\s+/gm, '') // Remove leading whitespace from each line
+      .replace(/\n{3,}/g, '\n\n'); // Remove excessive newlines again
+  }
+  
+  return markdown.trim();
+};
+
+// Function to crawl a page
+const crawlPage = async (url) => {
+  console.log(`Crawling: ${url}`);
+  
+  try {
+    // Mark as visited
+    visited.add(url);
+    
+    // Fetch the page
+    const response = await axios.get(url);
+    const $ = cheerio.load(response.data);
+    
+    // Extract title for filename
+    const title = $('title').text().trim() || new URL(url).pathname;
+    
+    // Convert to markdown
+    const markdown = convertToMarkdown($, url);
+    
+    if (markdown) {
+      // Create sanitized filename
+      const filename = sanitize(`${title.replace(/\s+/g, '-')}.md`);
+      const filePath = path.join(config.outputDir, filename);
+      
+      // Save to file
+      fs.writeFileSync(filePath, markdown);
+      console.log(`Saved: ${filePath}`);
+      
+      // Find and queue links
+      const links = extractLinks($, url);
+      for (const link of links) {
+        if (!visited.has(link) && !queue.includes(link)) {
+          queue.push(link);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error crawling ${url}: ${error.message}`);
+  }
+};
+
+// Function to parse sitemap
+const parseSitemap = async (sitemapUrl) => {
+  try {
+    console.log(`Fetching sitemap: ${sitemapUrl}`);
+    const response = await axios.get(sitemapUrl);
+    const parser = new xml2js.Parser({ explicitArray: false });
+    
+    const result = await parser.parseStringPromise(response.data);
+    
+    // Handle sitemap index (sitemap of sitemaps)
+    if (result.sitemapindex && result.sitemapindex.sitemap) {
+      console.log('Found sitemap index...');
+      const sitemaps = Array.isArray(result.sitemapindex.sitemap) 
+        ? result.sitemapindex.sitemap 
+        : [result.sitemapindex.sitemap];
+      
+      for (const sitemap of sitemaps) {
+        if (sitemap.loc) {
+          await parseSitemap(sitemap.loc);
+        }
+      }
+    } 
+    // Handle regular sitemap
+    else if (result.urlset && result.urlset.url) {
+      const urls = Array.isArray(result.urlset.url) 
+        ? result.urlset.url 
+        : [result.urlset.url];
+      
+      console.log(`Found ${urls.length} URLs in sitemap`);
+      
+      for (const urlObj of urls) {
+        if (urlObj.loc) {
+          // Skip URLs with hash fragments
+          const urlInstance = new URL(urlObj.loc);
+          if (urlInstance.hash) {
+            console.log(`Skipping URL with hash fragment: ${urlObj.loc}`);
+            continue;
+          }
+          
+          if (!visited.has(urlObj.loc) && !queue.includes(urlObj.loc)) {
+            queue.push(urlObj.loc);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error parsing sitemap ${sitemapUrl}: ${error.message}`);
+  }
+};
+
+// Main function
+const main = async () => {
+  console.log('Starting web crawler...');
+  console.log(`Base URL: ${config.startUrl}`);
+  console.log(`Output directory: ${config.outputDir}`);
+  
+  // Ensure output directory exists
+  ensureDirectoryExists(config.outputDir);
+  
+  // Use sitemap if configured
+  if (config.useSitemap) {
+    await parseSitemap(config.sitemapUrl);
+  }
+  
+  // If queue is empty (sitemap failed or not used), start with the base URL
+  if (queue.length === 0) {
+    queue.push(config.startUrl);
+  }
+  
+  // Process queue until empty or max pages reached
+  let pageCount = 0;
+  
+  while (queue.length > 0 && pageCount < config.maxPages) {
+    const url = queue.shift();
+    
+    if (!visited.has(url)) {
+      await crawlPage(url);
+      pageCount++;
+    }
+  }
+  
+  console.log(`Crawl complete! Processed ${pageCount} pages.`);
+};
+
+// Load configuration from file if it exists
+const loadConfig = () => {
+  try {
+    const configPath = path.join(__dirname, 'config', 'crawler-config.json');
+    if (fs.existsSync(configPath)) {
+      const userConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      console.log('Loading configuration from file...');
+      
+      // Update config with user values
+      Object.assign(config, userConfig);
+    }
+  } catch (error) {
+    console.error(`Error loading configuration: ${error.message}`);
+  }
+};
+
+// Run the crawler
+loadConfig();
+main().catch(console.error);
