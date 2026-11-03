@@ -131,7 +131,6 @@ website-crawler.js.backup   Earlier version of the crawler, before the Oscar Wyl
 
 ## Known limitations
 
-- **The crawl always starts with `https://example.com`.** The URL queue is created from the built-in default `startUrl` before `config/crawler-config.json` is loaded. With the sitemap on, this costs one wasted request that counts towards `maxPages`, and the log shows `No #maincontent found on the page` for it. With the sitemap off, the crawler fetches only `https://example.com` and stops, so link-following mode does not work until this is fixed.
 - **No JavaScript rendering.** Pages are fetched as raw HTML. Content that the browser fills in with scripts is missing or shows template placeholders, such as `Only %1 left` on product pages.
 - **`maxPages` counts every URL attempted**, including failed requests and pages with no `#maincontent`. It can be reached with fewer files saved than the limit.
 - **Pages with the same `<title>` overwrite each other**, because the filename comes from the title.

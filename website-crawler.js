@@ -20,8 +20,9 @@ const config = {
   strictSitemapOnly: false, // When true, only crawl URLs listed in sitemap
 };
 
-// Queue to store URLs to crawl
-const queue = [config.startUrl];
+// Queue to store URLs to crawl. Starts empty: main() fills it from the sitemap,
+// or with config.startUrl, after loadConfig() has applied the user's settings.
+const queue = [];
 // Set to track visited URLs
 const visited = new Set();
 
